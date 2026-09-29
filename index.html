@@ -244,7 +244,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             const minA = parseFloat(document.getElementById('sim-mina').value);
             const numA = parseInt(document.getElementById('sim-numa').value);
             
-            const maxN = simWasm._calculate_optimal_maxInputN(maxA, nTrials);
+            const maxN = simWasm._calculate_optimal_maxInputN(maxA*parseFloat(document.getElementById('sim-eta').value), nTrials);
             document.getElementById('tomo-maxn').value = maxN;
             currentMaxN = maxN; currentMaxC = maxC; nPulses = nTrials;
             logMsg(`Calculated optimal Max N = ${maxN}`);
