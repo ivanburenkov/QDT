@@ -294,7 +294,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             reader.readAsText(e.target.files[0]);
         };
 
-        function initPlots() {
+        /*function initPlots() {
             const alphaSq = Array.from(parsedAlphas).map(a => a*a);
             const fitTraces = [];
             for(let c=0; c<=currentMaxC; c++) {
@@ -316,6 +316,38 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 {x: [], y: [], mode: 'markers', name: 'LSDT POVM MSE', marker:{color:'#28a745', size:10, symbol:'star-open'}, visible: truePOVM ? true : 'legendonly'}
             ];
             Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, margin:{t:40} });
+        }*/
+        function initPlots() {
+            const alphaSq = Array.from(parsedAlphas).map(a => a*a);
+            const fitTraces = [];
+            for(let c=0; c<=currentMaxC; c++) {
+                const y = [];
+                for(let i=0; i<parsedAlphas.length; i++) y.push(parsedCounts[i*(currentMaxC+1)+c]);
+                fitTraces.push({ x: alphaSq, y: y, mode: 'markers', name: `Exp c=${c}`, marker: {size: 6} });
+            }
+            Plotly.newPlot('plot-fit', fitTraces, { title: 'Experimental Counts vs Live Fits', xaxis: {title:'Mean Photon Number (α²)'}, margin: {t:40} });
+            
+            document.getElementById('plot-heatmaps').innerHTML = '';
+            if (truePOVM) addHeatmap('True POVM', truePOVM);
+            
+            // Updated MSE traces mapped to distinct axes
+            let mseTraces = [
+                {x: [], y: [], mode: 'lines+markers', name: 'MLE Data MSE', xaxis: 'x', line:{color:'#d63384'}},
+                {x: [], y: [], mode: 'lines+markers', name: 'BDT Data MSE', xaxis: 'x2', line:{color:'#0056b3'}},
+                {x: [], y: [], mode: 'lines+markers', name: 'MLE POVM MSE', xaxis: 'x', line:{color:'#d63384', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
+                {x: [], y: [], mode: 'lines+markers', name: 'BDT POVM MSE', xaxis: 'x2', line:{color:'#0056b3', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
+                {x: [], y: [], mode: 'markers', name: 'LSDT Data MSE', xaxis: 'x', marker:{color:'#28a745', size:10, symbol:'star'}},
+                {x: [], y: [], mode: 'markers', name: 'LSDT POVM MSE', xaxis: 'x', marker:{color:'#28a745', size:10, symbol:'star-open'}, visible: truePOVM ? true : 'legendonly'}
+            ];
+            
+            // Updated layout with a top-mounted secondary x-axis and increased top margin
+            Plotly.newPlot('plot-mse', mseTraces, { 
+                title: 'Log-MSE Convergence', 
+                yaxis: { type: 'log', title: 'Mean Squared Error' },
+                xaxis: { title: 'MLE / LSDT Iterations', color: '#d63384' },
+                xaxis2: { title: 'BDT Iterations', overlaying: 'x', side: 'top', color: '#0056b3' },
+                margin: { t: 80, b: 40, l: 60, r: 40 } 
+            });
         }
 
         function addHeatmap(title, flatArray) {
