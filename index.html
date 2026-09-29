@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unified Detector Tomography Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <script src="./js/bdt.js"></script>
+    <script src="./POVM/simulator.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1600px; margin: 0 auto; padding: 20px; color: #333; background-color: #f4f7f6; }
+        h1 { border-bottom: 2px solid #0056b3; padding-bottom: 10px; color: #0056b3; }
+        .container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
+        .sidebar { flex: 1; min-width: 350px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .main-content { flex: 3; min-width: 800px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 20px; }
+        .form-group { margin-bottom: 12px; }
+        .form-row { display: flex; gap: 10px; margin-bottom: 12px; }
+        .form-row .form-group { flex: 1; margin-bottom: 0; }
+        label { display: block; font-weight: bold; margin-bottom: 4px; font-size: 13px; }
+        input[type="number"], input[type="file"], select { width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #0056b3; color: white; border: none; padding: 10px; cursor: pointer; border-radius: 4px; font-size: 14px; width: 100%; font-weight: bold; margin-top: 5px; }
+        button:hover { background: #004494; }
+        button:disabled { background: #ccc !important; cursor: not-allowed; }
+        .btn-green { background: #28a745; }
+        .btn-green:hover { background: #218838; }
+        .log-area { width: 100%; height: 150px; background: #1e1e1e; color: #00ff00; padding: 10px; overflow-y: auto; font-family: monospace; font-size: 12px; border-radius: 4px; border: none; resize: vertical; box-sizing: border-box;}
+        .plot-container { width: 100%; height: 400px; background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
+        hr { border: 0; border-top: 1px solid #ddd; margin: 15px 0; }
+        fieldset { border: 1px solid #ddd; border-radius: 4px; padding: 10px; margin-bottom: 15px; }
+        legend { font-weight: bold; font-size: 14px; padding: 0 5px; color: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>Unified Detector Tomography Dashboard</h1>
+    <div class="container">
+        <div class="sidebar">
+            <fieldset>
+                <legend>1. Data Source</legend>
+                <div class="form-group">
+                    <label>Upload Existing Data (.dat / .tsv)</label>
+                    <input type="file" id="data-file" accept=".txt,.dat,.tsv">
+                </div>
+                <hr>
+                <label style="color:#0056b3; margin-bottom:10px;">OR Generate Synthetic Data</label>
+                <div class="form-row">
+                    <div class="form-group"><label>Type</label><select id="sim-type"><option value="0">Ideal</option><option value="1" selected>QPNR</option></select></div>
+                    <div class="form-group"><label>Eta (η)</label><input type="number" id="sim-eta" value="0.85" step="0.05"></div>
+                    <div class="form-group"><label>Dark (Pd)</label><input type="number" id="sim-pd" value="0.01" step="0.01"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>Max Clicks (C)</label><input type="number" id="sim-maxc" value="4"></div>
+                    <div class="form-group"><label>Trials</label><input type="number" id="sim-trials" value="10000"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>Min α</label><input type="number" id="sim-mina" value="0.0" step="0.5"></div>
+                    <div class="form-group"><label>Max α</label><input type="number" id="sim-maxa" value="3.0" step="0.5"></div>
+                    <div class="form-group"><label>Alphas</label><input type="number" id="sim-numa" value="10"></div>
+                </div>
+                <button id="btn-generate" class="btn-green">Generate POVM & Data</button>
+            </fieldset>
+
+            <fieldset>
+                <legend>2. Tomography Configuration</legend>
+                <div class="form-group">
+                    <label>Max Input Photons (N)</label>
+                    <input type="number" id="tomo-maxn" value="20">
+                </div>
+                <div><label><input type="checkbox" id="run-lsdt"> LSDT (CVXPY / Scipy)</label></div>
+                <div><label><input type="checkbox" id="run-mle" checked> MLEDT (SciPy Minimize)</label></div>
+                
+                <div class="form-row" style="margin-top: 5px;">
+                    <div class="form-group"><label>MLE Iters</label><input type="number" id="mle-iter" value="200"></div>
+                    <div class="form-group"><label>MLE Update Rate</label><input type="number" id="mle-update" value="5"></div>
+                </div>
+
+                <hr>
+                <div><label><input type="checkbox" id="run-bdt" checked> BDT (WASM MCMC)</label></div>
+                <div><label style="font-weight:normal; font-size: 12px; margin-left: 20px;"><input type="checkbox" id="bdt-warmstart" checked> Warm-start BDT with MLE</label></div>
+                
+                <div class="form-row" style="margin-top: 5px;">
+                    <div class="form-group"><label>BDT Iters</label><input type="number" id="mcmc-iter" value="50000"></div>
+                    <div class="form-group"><label>BDT Update Rate</label><input type="number" id="mcmc-update" value="1000"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>Sigma</label><input type="number" id="mcmc-sigma" value="0.001" step="0.001"></div>
+                    <div class="form-group"><label>Lambda</label><input type="number" id="mcmc-lambda" value="500.0"></div>
+                </div>
+            </fieldset>
+
+            <button id="btn-run-all" disabled>Run Selected Tomography</button>
+            <button id="btn-download" disabled style="background: #17a2b8;">Download Results (.zip)</button>
+
+            <textarea id="log-output" class="log-area" readonly></textarea>
+        </div>
+
+        <div class="main-content">
+            <div id="plot-fit" class="plot-container"></div>
+            <div id="plot-mse" class="plot-container"></div>
+            <div id="plot-heatmaps" class="plot-container" style="display:flex; flex-direction: row; flex-wrap: wrap; height: auto; min-height: 380px; justify-content: flex-start; background: #fff; border:none; gap: 1%;"></div>
+        </div>
+    </div>
+
+    <script id="pyodide-worker" type="javascript/worker">
+        importScripts("https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js");
+        let pyodide;
+
+        const pythonCode = `
+import numpy as np
+import cvxpy as cp
+from scipy.optimize import minimize
+import math
+
+def Fexperiment(alphas, k):
+    F = np.zeros((len(alphas), k + 1))
+    for j1, mu in enumerate(alphas):
+        for j2 in range(k + 1):
+            F[j1, j2] = np.exp(-mu) * (mu**j2) / math.factorial(j2)
+    F[:, -1] = 1.0 - np.sum(F[:, :-1], axis=1)
+    return np.clip(F, 1e-15, 1.0)
+
+def diff_P(Pi_flat, PMeas, F, n_outcomes, Npulses):
+    k = int(len(Pi_flat)/n_outcomes)
+    # Default C-order (row-major) to match C MCMC 
+    Pi = np.reshape(Pi_flat, (k, n_outcomes))
+    return np.mean(((PMeas/Npulses) - (F @ Pi))**2)
+
+def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses):
+    P_meas = np.array(P_list).reshape((-1, n_outcomes))
+    F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
+    piOpt = cp.Variable((k_plus_1, n_outcomes))
+    constraints = [piOpt >= 0, cp.sum(piOpt, axis=1) == 1]
+    obj = cp.Minimize( cp.sum((P_meas - n_pulses*F@piOpt)**2/(P_meas+0.5)) )
+    prob = cp.Problem(obj, constraints)
+    prob.solve(verbose=False)
+    Pi_res = piOpt.value if piOpt.value is not None else (np.ones((k_plus_1, n_outcomes))/n_outcomes)
+    expected = (F @ Pi_res) * n_pulses
+    final_mse = diff_P(Pi_res.flatten(), P_meas, F, n_outcomes, n_pulses)
+    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse)
+
+def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
+    k = int(len(Pi_flat)/n_outcomes)
+    Pi = np.reshape(Pi_flat, (k, n_outcomes))
+    expected = (F @ Pi) * Npulses
+    lL = -np.sum(PMeas * np.log(expected + 1e-10))
+    return lL / (F.shape[0] * Npulses)
+
+def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message):
+    P = np.array(P_list).reshape((-1, n_outcomes))
+    F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
+    x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
+    
+    def constraint(x):
+        Pi = np.reshape(x, (k_plus_1, n_outcomes))
+        return np.sum(Pi, 1) - 1.0
+
+    def iteration_callback(xk, state):
+        if int(state.nit) % update_rate == 0:
+            mse = diff_P(xk, P, F, n_outcomes, n_pulses)
+            PiOut = np.reshape(xk, (k_plus_1, n_outcomes))
+            expected = (F @ PiOut) * n_pulses
+            js_post_message(xk.tolist(), expected.flatten().tolist(), float(mse))
+        return False
+
+    res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), method='trust-constr', bounds=[(0,1)]*len(x0), constraints={'type': 'eq', 'fun': constraint}, options={'maxiter': max_iter, 'verbose': 0}, callback=iteration_callback)
+    
+    final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
+    PiOut_f = np.reshape(res.x, (k_plus_1, n_outcomes))
+    expected_f = (F @ PiOut_f) * n_pulses
+    return res.x.tolist(), expected_f.flatten().tolist(), float(final_mse)
+`;
+        self.onmessage = async function(e) {
+            const data = e.data;
+            if (data.type === 'init') {
+                pyodide = await loadPyodide();
+                await pyodide.loadPackage(['numpy', 'scipy', 'cvxpy-base']);
+                await pyodide.runPythonAsync(pythonCode);
+                self.postMessage({type: 'ready'});
+            } else if (data.type === 'lsdt') {
+                const res = pyodide.globals.get("run_lsdt")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses);
+                self.postMessage({type: 'lsdt_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2]});
+            } else if (data.type === 'mle') {
+                const js_callback = (xk, expected, mse) => {
+                    self.postMessage({ type: 'mle_progress', povm: xk.toJs(), expected: expected.toJs(), mse: mse });
+                };
+                const res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback);
+                self.postMessage({type: 'mle_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2]});
+            }
+        };
+    </script>
+
+    <script>
+        const logBox = document.getElementById('log-output');
+        function logMsg(m) {
+            logBox.value += `[${new Date().toLocaleTimeString()}] ${m}\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        let parsedAlphas = null;
+        let parsedCounts = null;
+        let currentMaxC = 0, currentMaxN = 0, nPulses = 1;
+        let truePOVM = null; 
+        
+        let results = { lsdt: null, mle: null, bdt: null };
+        let startTimes = { LSDT: 0, MLE: 0, BDT: 0 }; // Global tracker for start times
+        let pyWorker = null;
+        let simWasm = null;
+        let bdtAnimationFrame;
+
+        Module.onRuntimeInitialized = function() { logMsg("BDT WASM Ready."); checkReady(); };
+        createSimulator({ locateFile: (path) => path.endsWith('.wasm') ? 'POVM/' + path : path }).then(instance => { simWasm = instance; logMsg("Simulator WASM Ready."); checkReady(); });
+
+        const blob = new Blob([document.getElementById('pyodide-worker').textContent], {type: 'application/javascript'});
+        pyWorker = new Worker(URL.createObjectURL(blob));
+        pyWorker.postMessage({type: 'init'});
+        
+        pyWorker.onmessage = (e) => {
+            const d = e.data;
+            if (d.type === 'ready') { 
+                logMsg("Pyodide Engine Ready."); checkReady(); 
+            }
+            else if (d.type === 'lsdt_done') { 
+                results.lsdt = d.povm; 
+                updateLivePlot('LSDT', d.povm, d.expected, d.mse, 4, 5);
+                handleSolverDone('LSDT'); 
+            }
+            else if (d.type === 'mle_progress') { 
+                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+            }
+            else if (d.type === 'mle_done') { 
+                results.mle = d.povm; 
+                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+                handleSolverDone('MLE'); 
+            }
+        };
+
+        function checkReady() {
+            if (simWasm && pyWorker && Module) document.getElementById('btn-generate').disabled = false;
+        }
+
+        document.getElementById('btn-generate').onclick = () => {
+            const maxC = parseInt(document.getElementById('sim-maxc').value);
+            const nTrials = parseInt(document.getElementById('sim-trials').value);
+            const maxA = parseFloat(document.getElementById('sim-maxa').value);
+            const minA = parseFloat(document.getElementById('sim-mina').value);
+            const numA = parseInt(document.getElementById('sim-numa').value);
+            
+            const maxN = simWasm._calculate_optimal_maxInputN(maxA, nTrials);
+            document.getElementById('tomo-maxn').value = maxN;
+            currentMaxN = maxN; currentMaxC = maxC; nPulses = nTrials;
+            logMsg(`Calculated optimal Max N = ${maxN}`);
+
+            const alphas = [];
+            for (let i=0; i<numA; i++) alphas.push(minA + i*(maxA-minA)/(numA-1 > 0 ? numA-1 : 1));
+            parsedAlphas = new Float64Array(alphas);
+
+            const sizeP = (maxN + 1) * (maxC + 1);
+            const ptrP = simWasm._allocate_f64(sizeP);
+            simWasm._generate_povm(parseInt(document.getElementById('sim-type').value), parseFloat(document.getElementById('sim-eta').value), parseFloat(document.getElementById('sim-pd').value), maxC, maxN, ptrP);
+            truePOVM = new Float64Array(simWasm.HEAPF64.buffer, ptrP, sizeP).slice();
+
+            const sizeC = numA * (maxC + 1);
+            const ptrA = simWasm._allocate_f64(numA);
+            const ptrOut = simWasm._allocate_i32(sizeC);
+            simWasm.HEAPF64.set(parsedAlphas, ptrA / 8);
+            simWasm.HEAPU32.fill(0, ptrOut / 4, ptrOut / 4 + sizeC);
+            simWasm._simulate_experiment(ptrP, ptrA, numA, nTrials, maxC, maxN, ptrOut);
+            
+            parsedCounts = new Float64Array(Array.from(new Int32Array(simWasm.HEAP32.buffer, ptrOut, sizeC)));
+            simWasm._free_mem(ptrP); simWasm._free_mem(ptrA); simWasm._free_mem(ptrOut);
+
+            logMsg("Synthetic POVM and Data generated.");
+            document.getElementById('btn-run-all').disabled = false;
+            initPlots();
+        };
+
+        document.getElementById('data-file').onchange = (e) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const tokens = ev.target.result.trim().split(/\s+/).filter(Boolean).map(Number);
+                currentMaxC = tokens[0]; const numA = tokens[1];
+                parsedAlphas = new Float64Array(numA);
+                for(let i=0; i<numA; i++) parsedAlphas[i] = Math.sqrt(tokens[2+i]);
+                parsedCounts = new Float64Array(numA*(currentMaxC+1));
+                let idx = 2 + numA;
+                for(let i=0; i<parsedCounts.length; i++) parsedCounts[i] = tokens[idx++];
+                
+                nPulses = 0; for(let c=0; c<=currentMaxC; c++) nPulses += parsedCounts[c];
+                truePOVM = null; 
+                currentMaxN = parseInt(document.getElementById('tomo-maxn').value);
+                logMsg(`Loaded data file. Max C=${currentMaxC}, Num A=${numA}, Trials≈${nPulses}`);
+                document.getElementById('btn-run-all').disabled = false;
+                initPlots();
+            };
+            reader.readAsText(e.target.files[0]);
+        };
+
+        function initPlots() {
+            const alphaSq = Array.from(parsedAlphas).map(a => a*a);
+            const fitTraces = [];
+            for(let c=0; c<=currentMaxC; c++) {
+                const y = [];
+                for(let i=0; i<parsedAlphas.length; i++) y.push(parsedCounts[i*(currentMaxC+1)+c]);
+                fitTraces.push({ x: alphaSq, y: y, mode: 'markers', name: `Exp c=${c}`, marker: {size: 6} });
+            }
+            Plotly.newPlot('plot-fit', fitTraces, { title: 'Experimental Counts vs Live Fits', xaxis: {title:'Mean Photon Number (α²)'}, margin: {t:40} });
+            
+            document.getElementById('plot-heatmaps').innerHTML = '';
+            if (truePOVM) addHeatmap('True POVM', truePOVM);
+            
+            let mseTraces = [
+                {x: [], y: [], mode: 'lines+markers', name: 'MLE Data MSE', line:{color:'#d63384'}},
+                {x: [], y: [], mode: 'lines+markers', name: 'BDT Data MSE', line:{color:'#0056b3'}},
+                {x: [], y: [], mode: 'lines+markers', name: 'MLE POVM MSE', line:{color:'#d63384', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
+                {x: [], y: [], mode: 'lines+markers', name: 'BDT POVM MSE', line:{color:'#0056b3', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
+                {x: [], y: [], mode: 'markers', name: 'LSDT Data MSE', marker:{color:'#28a745', size:10, symbol:'star'}},
+                {x: [], y: [], mode: 'markers', name: 'LSDT POVM MSE', marker:{color:'#28a745', size:10, symbol:'star-open'}, visible: truePOVM ? true : 'legendonly'}
+            ];
+            // Plot MSE against Elapsed Time
+            Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, xaxis: {title: 'Elapsed Time (seconds)'}, margin:{t:40} });
+        }
+
+        function addHeatmap(title, flatArray) {
+            const divId = 'heatmap-' + title.replace(/\s+/g, '-');
+            let div = document.getElementById(divId);
+            if (!div) {
+                div = document.createElement('div');
+                div.id = divId;
+                div.style.width = '32%'; 
+                div.style.height = '330px';
+                document.getElementById('plot-heatmaps').appendChild(div);
+            }
+            const z = [];
+            for(let c=0; c<=currentMaxC; c++) {
+                let row = [];
+                for(let n=0; n<=currentMaxN; n++) row.push(flatArray[n*(currentMaxC+1)+c]);
+                z.push(row);
+            }
+            Plotly.react(div, [{z: z, type: 'heatmap', colorscale: 'Viridis', zmin:0, zmax:1}], {title: title, margin:{t:30, b:30, l:40, r:40}});
+        }
+
+        function calcPovmMse(flatArray) {
+            if (!truePOVM) return null;
+            let mse = 0;
+            for(let i=0; i<truePOVM.length; i++) mse += Math.pow(truePOVM[i] - flatArray[i], 2);
+            return mse / truePOVM.length;
+        }
+
+        function updateLivePlot(alg, povmFlat, expectedCounts, dataMse, dataMseIdx, povmMseIdx) {
+            addHeatmap(alg, povmFlat);
+            
+            const alphaSq = Array.from(parsedAlphas).map(a => a*a);
+            const plotFit = document.getElementById('plot-fit');
+            let tracesToUpdate = [];
+            let yData = [];
+            
+            for(let c=0; c<=currentMaxC; c++) {
+                const traceName = `${alg} c=${c}`;
+                let existingIndex = plotFit.data.findIndex(t => t.name === traceName);
+                const y = [];
+                for(let i=0; i<parsedAlphas.length; i++) y.push(expectedCounts[i*(currentMaxC+1)+c]);
+                
+                if (existingIndex === -1) {
+                    Plotly.addTraces('plot-fit', { x: alphaSq, y: y, mode: 'lines', line:{dash:'dot', width: 2}, name: traceName, hoverinfo: 'skip' });
+                } else {
+                    tracesToUpdate.push(existingIndex);
+                    yData.push(y);
+                }
+            }
+            if (tracesToUpdate.length > 0) Plotly.restyle('plot-fit', { y: yData }, tracesToUpdate);
+
+            // Calculate elapsed time in seconds from Date.now()
+            let elapsedSeconds = (Date.now() - startTimes[alg]) / 1000.0;
+
+            if (dataMseIdx !== null) {
+                Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[dataMse]] }, [dataMseIdx]);
+                if (truePOVM && povmMseIdx !== null) {
+                    let povmMse = calcPovmMse(povmFlat);
+                    Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[povmMse]] }, [povmMseIdx]);
+                }
+            }
+        }
+
+        document.getElementById('btn-run-all').onclick = () => {
+            currentMaxN = parseInt(document.getElementById('tomo-maxn').value);
+            results = { lsdt: null, mle: null, bdt: null };
+            
+            Plotly.restyle('plot-mse', {x: [[]], y: [[]]}, [0, 1, 2, 3, 4, 5]);
+            document.getElementById('btn-run-all').disabled = true;
+            
+            if (document.getElementById('run-lsdt').checked) {
+                logMsg("Starting LSDT...");
+                startTimes['LSDT'] = Date.now();
+                pyWorker.postMessage({type: 'lsdt', counts: Array.from(parsedCounts), alphas: Array.from(parsedAlphas).map(a=>a*a), maxC: currentMaxC, maxN: currentMaxN, npulses: nPulses});
+            } else checkNext('LSDT');
+        };
+
+        function handleSolverDone(alg) {
+            logMsg(`${alg} finished.`);
+            checkNext(alg);
+        }
+
+        function checkNext(completedAlg) {
+            if (completedAlg === 'LSDT') {
+                if (document.getElementById('run-mle').checked) {
+                    logMsg("Starting MLEDT...");
+                    const iters = parseInt(document.getElementById('mle-iter').value);
+                    const updateRate = parseInt(document.getElementById('mle-update').value);
+                    startTimes['MLE'] = Date.now();
+                    pyWorker.postMessage({type: 'mle', counts: Array.from(parsedCounts), alphas: Array.from(parsedAlphas).map(a=>a*a), maxC: currentMaxC, maxN: currentMaxN, npulses: nPulses, iters: iters, updateRate: updateRate});
+                } else checkNext('MLE');
+            } else if (completedAlg === 'MLE') {
+                if (document.getElementById('run-bdt').checked) {
+                    logMsg("Starting BDT...");
+                    startTimes['BDT'] = Date.now();
+                    runBDT();
+                } else checkNext('BDT');
+            } else if (completedAlg === 'BDT') {
+                logMsg("All selected pipelines complete.");
+                document.getElementById('btn-run-all').disabled = false;
+                document.getElementById('btn-download').disabled = false;
+            }
+        }
+
+        function calcExpectedData(povmFlat) {
+            const numA = parsedAlphas.length;
+            let expected = new Float64Array(numA * (currentMaxC + 1));
+            for (let i = 0; i < numA; i++) {
+                let mu = parsedAlphas[i] * parsedAlphas[i];
+                for (let c = 0; c <= currentMaxC; c++) {
+                    let sum = 0;
+                    for (let n = 0; n <= currentMaxN; n++) {
+                        let p_n = (Math.exp(-mu) * Math.pow(mu, n)) / ((function f(x){return x===0?1:x*f(x-1)})(n));
+                        sum += p_n * povmFlat[n * (currentMaxC + 1) + c];
+                    }
+                    expected[i * (currentMaxC + 1) + c] = sum * nPulses;
+                }
+            }
+            return expected;
+        }
+
+        let bdtTotalIter, bdtStepSize, bdtCurrentIter, numParams;
+        let bdtAlphasPtr, bdtCountsPtr, bdtPovmPtr;
+
+        function runBDT() {
+            numParams = (currentMaxC + 1) * (currentMaxN + 1);
+            let initialPovm = new Float64Array(numParams);
+            
+            if (document.getElementById('bdt-warmstart').checked && results.mle) {
+                logMsg("Warm-starting BDT using MLE results.");
+                initialPovm.set(results.mle);
+            } else {
+                for(let i=0; i<numParams; i++) initialPovm[i] = 1.0 / (currentMaxC + 1);
+            }
+
+            bdtAlphasPtr = Module._malloc(parsedAlphas.length * 8);
+            bdtCountsPtr = Module._malloc(parsedCounts.length * 8);
+            bdtPovmPtr = Module._malloc(initialPovm.length * 8);
+
+            Module.HEAPF64.set(parsedAlphas, bdtAlphasPtr / 8);
+            Module.HEAPF64.set(parsedCounts, bdtCountsPtr / 8);
+            Module.HEAPF64.set(initialPovm, bdtPovmPtr / 8);
+
+            const sigma = parseFloat(document.getElementById('mcmc-sigma').value);
+            const lambda = parseFloat(document.getElementById('mcmc-lambda').value);
+            
+            bdtTotalIter = parseInt(document.getElementById('mcmc-iter').value);
+            bdtStepSize = parseInt(document.getElementById('mcmc-update').value);
+            bdtCurrentIter = 0;
+
+            Module.ccall('bdt_init', 'number', ['number','number','number','number','number','number','number','number','number'], 
+                [currentMaxN, currentMaxC, parsedAlphas.length, bdtAlphasPtr, bdtCountsPtr, bdtPovmPtr, sigma, lambda, 1234]);
+            
+            bdtLoop();
+        }
+
+        function bdtLoop() {
+            if (bdtCurrentIter < bdtTotalIter) {
+                let stepsThisFrame = Math.min(bdtStepSize, bdtTotalIter - bdtCurrentIter);
+                Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, bdtPovmPtr]);
+                bdtCurrentIter += stepsThisFrame;
+                
+                results.bdt = new Float64Array(Module.HEAPF64.buffer, bdtPovmPtr, numParams).slice();
+                let expected = calcExpectedData(results.bdt);
+                
+                let dataMse = 0;
+                for (let i = 0; i < parsedCounts.length; i++) {
+                    dataMse += Math.pow((parsedCounts[i]/nPulses) - (expected[i]/nPulses), 2);
+                }
+                dataMse /= parsedCounts.length;
+
+                updateLivePlot('BDT', results.bdt, expected, dataMse, 1, 3);
+                
+                bdtAnimationFrame = requestAnimationFrame(bdtLoop);
+            } else {
+                Module.ccall('bdt_cleanup', 'void', [], []);
+                Module._free(bdtAlphasPtr); Module._free(bdtCountsPtr); Module._free(bdtPovmPtr);
+                handleSolverDone('BDT');
+            }
+        }
+    </script>
+</body>
+</html>
