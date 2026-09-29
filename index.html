@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unified Detector Tomography Dashboard</title>
+    <title>Quantum Detector Tomography</title>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="./js/bdt.js"></script>
     <script src="./POVM/simulator.js"></script>
@@ -31,7 +31,7 @@
     </style>
 </head>
 <body>
-    <h1>Unified Detector Tomography Dashboard</h1>
+    <h1>Quantum Detector Tomography</h1>
     <div class="container">
         <div class="sidebar">
             <fieldset>
@@ -88,7 +88,7 @@
             </fieldset>
 
             <button id="btn-run-all" disabled>Run Selected Tomography</button>
-            <button id="btn-download" disabled style="background: #17a2b8;">Download Results (.zip)</button>
+            <button id="btn-download" disabled style="background: #17a2b8;">Download Results (.json)</button>
 
             <textarea id="log-output" class="log-area" readonly></textarea>
         </div>
@@ -497,6 +497,68 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 handleSolverDone('BDT');
             }
         }
+        // --- JSON Export Logic ---
+        document.getElementById('btn-download').onclick = () => {
+            logMsg("Bundling parameters and results into JSON...");
+            
+            const exportObject = {
+                metadata: {
+                    export_time: new Date().toISOString(),
+                },
+                generation_parameters: {
+                    type: parseInt(document.getElementById('sim-type').value) === 0 ? 'Ideal' : 'QPNR',
+                    eta: parseFloat(document.getElementById('sim-eta').value),
+                    pd: parseFloat(document.getElementById('sim-pd').value),
+                    max_c: parseInt(document.getElementById('sim-maxc').value),
+                    trials: parseInt(document.getElementById('sim-trials').value),
+                    min_alpha: parseFloat(document.getElementById('sim-mina').value),
+                    max_alpha: parseFloat(document.getElementById('sim-maxa').value),
+                    num_alphas: parseInt(document.getElementById('sim-numa').value)
+                },
+                tomography_parameters: {
+                    max_n: currentMaxN,
+                    max_c: currentMaxC,
+                    run_lsdt: document.getElementById('run-lsdt').checked,
+                    run_mle: document.getElementById('run-mle').checked,
+                    run_bdt: document.getElementById('run-bdt').checked,
+                    mle: {
+                        iterations: parseInt(document.getElementById('mle-iter').value),
+                        update_rate: parseInt(document.getElementById('mle-update').value)
+                    },
+                    bdt: {
+                        warm_start: document.getElementById('bdt-warmstart').checked,
+                        iterations: parseInt(document.getElementById('mcmc-iter').value),
+                        update_rate: parseInt(document.getElementById('mcmc-update').value),
+                        sigma: parseFloat(document.getElementById('mcmc-sigma').value),
+                        lambda: parseFloat(document.getElementById('mcmc-lambda').value)
+                    }
+                },
+                experimental_data: {
+                    alphas: parsedAlphas ? Array.from(parsedAlphas) : null,
+                    counts: parsedCounts ? Array.from(parsedCounts) : null,
+                    total_pulses_per_alpha: nPulses
+                },
+                povm_matrices: {
+                    true_povm: truePOVM ? Array.from(truePOVM) : null,
+                    lsdt: results.lsdt ? Array.from(results.lsdt) : null,
+                    mle: results.mle ? Array.from(results.mle) : null,
+                    bdt: results.bdt ? Array.from(results.bdt) : null
+                }
+            };
+
+            const jsonString = JSON.stringify(exportObject, null, 4);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `tomography_results_${Date.now()}.json`;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            logMsg("JSON Download complete.");
+        };
     </script>
 </body>
 </html>
