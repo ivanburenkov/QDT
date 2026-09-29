@@ -178,7 +178,17 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses):
 
         // Init WASM Modules
         Module.onRuntimeInitialized = function() { logMsg("BDT WASM Ready."); checkReady(); };
-        createSimulator({ locateFile: (path) => path }).then(instance => { simWasm = instance; logMsg("Simulator WASM Ready."); checkReady(); });
+        //createSimulator({ locateFile: (path) => path }).then(instance => { simWasm = instance; logMsg("Simulator WASM Ready."); checkReady(); });
+        createSimulator({ 
+            locateFile: (path) => { 
+                if (path.endsWith('.wasm')) return 'POVM/' + path; 
+                return path; 
+            } 
+        }).then(instance => { 
+            simWasm = instance; 
+            logMsg("Simulator WASM Ready."); 
+            checkReady(); 
+        });
 
         // Init Pyodide Worker
         const blob = new Blob([document.getElementById('pyodide-worker').textContent], {type: 'application/javascript'});
