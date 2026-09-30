@@ -228,15 +228,16 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             }
             else if (d.type === 'lsdt_done') { 
                 results.lsdt = d.povm; 
-                updateLivePlot('LSDT', d.povm, d.expected, d.mse, 4, 5);
+                // Explicitly pass null for Bayesian MSE parameters
+                updateLivePlot('LSDT', d.povm, d.expected, d.mse, 4, 5, null, null);
                 handleSolverDone('LSDT'); 
             }
             else if (d.type === 'mle_progress') { 
-                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2, null, null); 
             }
             else if (d.type === 'mle_done') { 
                 results.mle = d.povm; 
-                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+                updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2, null, null); 
                 handleSolverDone('MLE'); 
             }
         };
@@ -355,7 +356,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             return mse / truePOVM.length;
         }
 
-        function updateLivePlot(alg, povmFlat, expectedCounts, dataMse, dataMseIdx, povmMseIdx) {
+        function updateLivePlot(alg, povmFlat, expectedCounts, dataMse, dataMseIdx, povmMseIdx, bayesianMse = null, bayesianMseIdx = null) {
             addHeatmap(alg, povmFlat);
             
             const alphaSq = Array.from(parsedAlphas).map(a => a*a);
