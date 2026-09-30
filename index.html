@@ -400,7 +400,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             currentMaxN = parseInt(document.getElementById('tomo-maxn').value);
             results = { lsdt: null, mle: null, bdt: null };
             
-            Plotly.restyle('plot-mse', {x: [[]], y: [[]]}, [0, 1, 2, 3, 4, 5]);
+            Plotly.restyle('plot-mse', {x: [[]], y: [[]]}, [0, 1, 2, 3, 4, 5, 6]);
             document.getElementById('btn-run-all').disabled = true;
             
             if (document.getElementById('run-lsdt').checked) {
