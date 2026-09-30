@@ -206,6 +206,14 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         let simWasm = null;
         let bdtAnimationFrame;
 
+        let bdtTotalIter, bdtStepSize, bdtCurrentIter, numParams;
+        let bdtAlphasPtr, bdtCountsPtr, bdtPovmPtr;
+        
+        // NEW: Welford's algorithm variables for MCMC posterior mean and variance
+        let bdtSampleCount = 0;
+        let bdtMean = null;
+        let bdtM2 = null;
+
         Module.onRuntimeInitialized = function() { logMsg("BDT WASM Ready."); checkReady(); };
         createSimulator({ locateFile: (path) => path.endsWith('.wasm') ? 'POVM/' + path : path }).then(instance => { simWasm = instance; logMsg("Simulator WASM Ready."); checkReady(); });
 
@@ -313,7 +321,9 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 {x: [], y: [], mode: 'lines+markers', name: 'MLE POVM MSE', line:{color:'#d63384', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
                 {x: [], y: [], mode: 'lines+markers', name: 'BDT POVM MSE', line:{color:'#0056b3', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
                 {x: [], y: [], mode: 'markers', name: 'LSDT Data MSE', marker:{color:'#28a745', size:10, symbol:'star'}},
-                {x: [], y: [], mode: 'markers', name: 'LSDT POVM MSE', marker:{color:'#28a745', size:10, symbol:'star-open'}, visible: truePOVM ? true : 'legendonly'}
+                {x: [], y: [], mode: 'markers', name: 'LSDT POVM MSE', marker:{color:'#28a745', size:10, symbol:'star-open'}, visible: truePOVM ? true : 'legendonly'},
+                // NEW: Bayesian Estimate of POVM MSE
+                {x: [], y: [], mode: 'lines', name: 'BDT Bayesian POVM MSE Est.', line:{color:'#17a2b8', dash:'dash'}}
             ];
             // Plot MSE against Elapsed Time
             Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, xaxis: {title: 'Elapsed Time (seconds)'}, margin:{t:40} });
@@ -376,6 +386,11 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 if (truePOVM && povmMseIdx !== null) {
                     let povmMse = calcPovmMse(povmFlat);
                     Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[povmMse]] }, [povmMseIdx]);
+                }
+
+                // NEW: Plot the Bayesian Uncertainty Estimate
+                if (bayesianMse !== null && bayesianMseIdx !== null && bdtSampleCount > 1) {
+                    Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[bayesianMse]] }, [bayesianMseIdx]);
                 }
             }
         }
@@ -444,6 +459,11 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         function runBDT() {
             numParams = (currentMaxC + 1) * (currentMaxN + 1);
             let initialPovm = new Float64Array(numParams);
+
+            // NEW: Reset Welford variables
+            bdtSampleCount = 0;
+            bdtMean = new Float64Array(numParams);
+            bdtM2 = new Float64Array(numParams);
             
             if (document.getElementById('bdt-warmstart').checked && results.mle) {
                 logMsg("Warm-starting BDT using MLE results.");
@@ -473,7 +493,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             bdtLoop();
         }
 
-        function bdtLoop() {
+        /*function bdtLoop() {
             if (bdtCurrentIter < bdtTotalIter) {
                 let stepsThisFrame = Math.min(bdtStepSize, bdtTotalIter - bdtCurrentIter);
                 Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, bdtPovmPtr]);
@@ -496,7 +516,55 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 Module._free(bdtAlphasPtr); Module._free(bdtCountsPtr); Module._free(bdtPovmPtr);
                 handleSolverDone('BDT');
             }
+        }*/
+
+        function bdtLoop() {
+            if (bdtCurrentIter < bdtTotalIter) {
+                let stepsThisFrame = Math.min(bdtStepSize, bdtTotalIter - bdtCurrentIter);
+                Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, bdtPovmPtr]);
+                bdtCurrentIter += stepsThisFrame;
+                
+                // Read the raw walker state from WASM
+                let currentState = new Float64Array(Module.HEAPF64.buffer, bdtPovmPtr, numParams);
+                
+                bdtSampleCount++;
+                let bayesianMse = 0.0;
+                
+                // Welford's Online Algorithm for Mean and Variance
+                for (let i = 0; i < numParams; i++) {
+                    let val = currentState[i];
+                    let delta = val - bdtMean[i];
+                    bdtMean[i] += delta / bdtSampleCount;
+                    let delta2 = val - bdtMean[i];
+                    bdtM2[i] += delta * delta2;
+                    
+                    if (bdtSampleCount > 1) {
+                        bayesianMse += (bdtM2[i] / (bdtSampleCount - 1));
+                    }
+                }
+                bayesianMse /= numParams; // Average variance across all elements
+                
+                // Use the running posterior mean for all UI updates
+                results.bdt = bdtMean.slice(); 
+                let expected = calcExpectedData(results.bdt);
+                
+                let dataMse = 0;
+                for (let i = 0; i < parsedCounts.length; i++) {
+                    dataMse += Math.pow((parsedCounts[i]/nPulses) - (expected[i]/nPulses), 2);
+                }
+                dataMse /= parsedCounts.length;
+
+                // Pass the Bayesian MSE and its trace index (6) to the plotter
+                updateLivePlot('BDT', results.bdt, expected, dataMse, 1, 3, bayesianMse, 6);
+                
+                bdtAnimationFrame = requestAnimationFrame(bdtLoop);
+            } else {
+                Module.ccall('bdt_cleanup', 'void', [], []);
+                Module._free(bdtAlphasPtr); Module._free(bdtCountsPtr); Module._free(bdtPovmPtr);
+                handleSolverDone('BDT');
+            }
         }
+        
         // --- JSON Export Logic ---
         document.getElementById('btn-download').onclick = () => {
             logMsg("Bundling parameters and results into JSON...");
