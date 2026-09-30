@@ -363,7 +363,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, xaxis: {title: 'Elapsed Time (seconds)'}, margin:{t:40} });
         }
 
-        function addHeatmap(title, flatArray) {
+        /*function addHeatmap(title, flatArray) {
             const divId = 'heatmap-' + title.replace(/\s+/g, '-');
             let div = document.getElementById(divId);
             if (!div) {
@@ -380,14 +380,67 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 z.push(row);
             }
             Plotly.react(div, [{z: z, type: 'heatmap', colorscale: 'Viridis', zmin:0, zmax:1}], {title: title, margin:{t:30, b:30, l:40, r:40}});
-        }
+        }*/
 
-        function calcPovmMse(flatArray) {
+        /*function calcPovmMse(flatArray) {
             if (!truePOVM) return null;
             let mse = 0;
             for(let i=0; i<truePOVM.length; i++) mse += Math.pow(truePOVM[i] - flatArray[i], 2);
             return mse / truePOVM.length;
+        }*/
+        function calcPovmMse(flatArray) {
+            if (!truePOVM) return null;
+            
+            // Calculate N for both matrices based on the shared Max C
+            let simMaxN = (truePOVM.length / (currentMaxC + 1)) - 1;
+            let reconMaxN = (flatArray.length / (currentMaxC + 1)) - 1;
+            
+            // Truncate to the shared space
+            let minN = Math.min(simMaxN, reconMaxN);
+            
+            let mse = 0;
+            let elements = 0;
+            
+            for (let n = 0; n <= minN; n++) {
+                for (let c = 0; c <= currentMaxC; c++) {
+                    let idx = n * (currentMaxC + 1) + c;
+                    mse += Math.pow(truePOVM[idx] - flatArray[idx], 2);
+                    elements++;
+                }
+            }
+            return mse / elements;
         }
+
+        function addHeatmap(title, flatArray) {
+            const divId = 'heatmap-' + title.replace(/\s+/g, '-');
+            let div = document.getElementById(divId);
+            if (!div) {
+                div = document.createElement('div');
+                div.id = divId;
+                div.style.width = '32%'; 
+                div.style.height = '330px';
+                document.getElementById('plot-heatmaps').appendChild(div);
+            }
+            
+            // Truncate heatmap to the actual bounds of the array being plotted
+            let arrayMaxN = (flatArray.length / (currentMaxC + 1)) - 1;
+            let plotMaxN = Math.min(currentMaxN, arrayMaxN);
+            
+            const z = [];
+            for(let c=0; c<=currentMaxC; c++) {
+                let row = [];
+                for(let n=0; n<=plotMaxN; n++) {
+                    let idx = n * (currentMaxC + 1) + c;
+                    row.push(flatArray[idx]);
+                }
+                z.push(row);
+            }
+            Plotly.react(div, [{z: z, type: 'heatmap', colorscale: 'Viridis', zmin:0, zmax:1}], {
+                title: title + ` (N=${plotMaxN})`, 
+                margin:{t:30, b:30, l:40, r:40}
+            });
+        }
+        
 
         function updateLivePlot(alg, povmFlat, expectedCounts, dataMse, dataMseIdx, povmMseIdx, bayesianMse = null, bayesianMseIdx = null) {
             addHeatmap(alg, povmFlat);
@@ -449,7 +502,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             checkNext(alg);
         }
 
-        function checkNext(completedAlg) {
+        /*function checkNext(completedAlg) {
             if (completedAlg === 'LSDT') {
                 if (document.getElementById('run-mle').checked) {
                     logMsg("Starting MLEDT...");
@@ -470,7 +523,42 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 document.getElementById('btn-stop').disabled = true;
                 document.getElementById('btn-download').disabled = false;
             }
+        }*/
+
+        function checkNext(completedAlg) {
+            if (completedAlg === 'LSDT') {
+                if (document.getElementById('run-mle').checked) {
+                    logMsg("Starting MLEDT...");
+                    const iters = parseInt(document.getElementById('mle-iter').value);
+                    const updateRate = parseInt(document.getElementById('mle-update').value);
+                    startTimes['MLE'] = Date.now();
+                    pyWorker.postMessage({type: 'mle', counts: Array.from(parsedCounts), alphas: Array.from(parsedAlphas).map(a=>a*a), maxC: currentMaxC, maxN: currentMaxN, npulses: nPulses, iters: iters, updateRate: updateRate});
+                } else checkNext('MLE');
+            } else if (completedAlg === 'MLE') {
+                if (document.getElementById('run-bdt').checked) {
+                    logMsg("Starting BDT...");
+                    startTimes['BDT'] = Date.now();
+                    runBDT();
+                } else checkNext('BDT');
+            } else if (completedAlg === 'BDT') {
+                logMsg("All selected pipelines complete.");
+                document.getElementById('btn-run-all').disabled = false;
+                document.getElementById('btn-stop').disabled = true;
+                document.getElementById('btn-download').disabled = false;
+                
+                if (truePOVM) {
+                    logMsg("Calculating final MSEs against True POVM.");
+                    Object.keys(results).forEach(alg => {
+                        if (results[alg]) {
+                            // Call the updated truncation function instead of hardcoding array length
+                            let finalMse = calcPovmMse(results[alg]);
+                            logMsg(`-> ${alg.toUpperCase()} vs True: ${finalMse.toExponential(4)}`);
+                        }
+                    });
+                }
+            }
         }
+        
 
         function calcExpectedData(povmFlat) {
             const numA = parsedAlphas.length;
