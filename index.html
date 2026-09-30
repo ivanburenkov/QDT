@@ -435,6 +435,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             
             Plotly.restyle('plot-mse', {x: [[]], y: [[]]}, [0, 1, 2, 3, 4, 5, 6]);
             document.getElementById('btn-run-all').disabled = true;
+            document.getElementById('btn-stop').disabled = false;
             
             if (document.getElementById('run-lsdt').checked) {
                 logMsg("Starting LSDT...");
@@ -466,6 +467,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             } else if (completedAlg === 'BDT') {
                 logMsg("All selected pipelines complete.");
                 document.getElementById('btn-run-all').disabled = false;
+                document.getElementById('btn-stop').disabled = true;
                 document.getElementById('btn-download').disabled = false;
             }
         }
