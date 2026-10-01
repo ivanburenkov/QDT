@@ -228,7 +228,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             
     if valid_guess:
         # SANITIZE: Push boundaries inward to protect SciPy gradients
-        x0 = np.clip(x0, 1e-9, 1.0 - 1e-9)
+        x0 = np.clip(x0, 1e-5, 1.0 - 1e-5)
         Pi_x0 = np.reshape(x0, (k_plus_1, n_outcomes))
         Pi_x0 = Pi_x0 / np.sum(Pi_x0, axis=1, keepdims=True)
         x0 = Pi_x0.flatten()
