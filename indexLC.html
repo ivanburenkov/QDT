@@ -215,11 +215,20 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
     #x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
     # Use warm-start if provided, otherwise default to flat distribution
+    # Safely validate the warm-start guess against Pyodide proxy quirks
+    valid_guess = False
     if initial_guess is not None:
-        x0 = np.array(initial_guess)
-        # SANITIZE: Push exact 0.0s and 1.0s slightly inward to prevent SciPy gradient NaNs
+        try:
+            x0 = np.array(initial_guess, dtype=float)
+            # Ensure the guess perfectly matches the required dimension
+            if len(x0) == k_plus_1 * n_outcomes:
+                valid_guess = True
+        except Exception:
+            pass
+            
+    if valid_guess:
+        # SANITIZE: Push boundaries inward to protect SciPy gradients
         x0 = np.clip(x0, 1e-9, 1.0 - 1e-9)
-        # RE-NORMALIZE: Ensure rows sum to exactly 1.0 to strictly satisfy the equality constraint
         Pi_x0 = np.reshape(x0, (k_plus_1, n_outcomes))
         Pi_x0 = Pi_x0 / np.sum(Pi_x0, axis=1, keepdims=True)
         x0 = Pi_x0.flatten()
