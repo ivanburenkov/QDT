@@ -166,7 +166,7 @@ def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
     Pi_res = piOpt.value if piOpt.value is not None else (np.ones((k_plus_1, n_outcomes))/n_outcomes)
     expected = (F @ Pi_res) * n_pulses
     final_mse = diff_P(Pi_res.flatten(), P_meas, F, n_outcomes, n_pulses)
-    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse), float(elapsed)
+    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse)
       
 def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
     k = int(len(Pi_flat)/n_outcomes)
