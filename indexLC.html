@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unified Detector Tomography Dashboard</title>
+    <title>Quantum Detector Tomography</title>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="./js/bdt.js"></script>
     <script src="./POVM/simulator.js"></script>
@@ -31,7 +31,7 @@
     </style>
 </head>
 <body>
-    <h1>Unified Detector Tomography Dashboard</h1>
+    <h1>Quantum Detector Tomography</h1>
     <div class="container">
         <div class="sidebar">
             <fieldset>
@@ -66,7 +66,6 @@
                     <input type="number" id="tomo-maxn" value="20">
                 </div>
                 
-                <hr>
                 <div><label><input type="checkbox" id="run-lsdt" checked> LSDT (CVXPY Smoothing Sweep)</label></div>
                 <div class="form-row" style="margin-top: 5px;">
                     <div class="form-group">
@@ -86,9 +85,10 @@
                     <div class="form-group"><label>End Lambda</label><input type="number" id="lsdt-max" value="10000.0"></div>
                     <div class="form-group"><label id="lbl-lsdt-step">Multiplier</label><input type="number" id="lsdt-step" value="3.0"></div>
                 </div>
-
+              
                 <hr>
                 <div><label><input type="checkbox" id="run-mle" checked> MLEDT (SciPy Minimize)</label></div>
+                
                 <div class="form-row" style="margin-top: 5px;">
                     <div class="form-group"><label>MLE Iters</label><input type="number" id="mle-iter" value="200"></div>
                     <div class="form-group"><label>MLE Update Rate</label><input type="number" id="mle-update" value="5"></div>
@@ -145,7 +145,6 @@
         }
     </script>
 
-    <!-- PYODIDE WORKER CODE -->
     <script id="pyodide-worker" type="javascript/worker">
         importScripts("https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js");
         let pyodide;
@@ -158,7 +157,6 @@ import numpy as np
 import cvxpy as cp
 from scipy.optimize import minimize
 import math
-import time
 
 def Fexperiment(alphas, k):
     F = np.zeros((len(alphas), k + 1))
@@ -170,11 +168,11 @@ def Fexperiment(alphas, k):
 
 def diff_P(Pi_flat, PMeas, F, n_outcomes, Npulses):
     k = int(len(Pi_flat)/n_outcomes)
+    # Default C-order (row-major) to match C MCMC 
     Pi = np.reshape(Pi_flat, (k, n_outcomes))
     return np.mean(((PMeas/Npulses) - (F @ Pi))**2)
 
 def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
-    start_time = time.time()
     P_meas = np.array(P_list).reshape((-1, n_outcomes))
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
     piOpt = cp.Variable((k_plus_1, n_outcomes))
@@ -183,13 +181,15 @@ def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
     data_fitting = cp.sum((P_meas - n_pulses*F@piOpt)**2/(P_meas+0.5))
     
     if lambda_reg > 0:
-        reg_term = cp.sum(cp.square(cp.diff(piOpt, k=2, axis=0)))
-        obj = cp.Minimize(data_fitting + lambda_reg * reg_term)
+        regularization = lambda_reg * cp.sum(cp.square(cp.diff(piOpt, k=2, axis=0)))
+        obj = cp.Minimize(data_fitting + regularization)
     else:
         obj = cp.Minimize(data_fitting)
         
     prob = cp.Problem(obj, constraints)
-    prob.solve(solver=cp.CLARABEL, verbose=False)
+    
+    # Use default Clarabel safely now that Rayon is restricted to 1 thread
+    prob.solve(verbose=False)
         
     Pi_res = piOpt.value if piOpt.value is not None else (np.ones((k_plus_1, n_outcomes))/n_outcomes)
     expected = (F @ Pi_res) * n_pulses
@@ -199,9 +199,8 @@ def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
     Pi_diff2 = np.diff(Pi_res, n=2, axis=0)
     reg_norm = float(np.sum(Pi_diff2**2))
     
-    elapsed = time.time() - start_time
-    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse), float(elapsed), reg_norm
-    
+    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse), reg_norm
+      
 def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
     k = int(len(Pi_flat)/n_outcomes)
     Pi = np.reshape(Pi_flat, (k, n_outcomes))
@@ -210,7 +209,6 @@ def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
     return lL / (F.shape[0] * Npulses)
 
 def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message):
-    start_time = time.time()
     P = np.array(P_list).reshape((-1, n_outcomes))
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
     x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
@@ -224,8 +222,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             mse = diff_P(xk, P, F, n_outcomes, n_pulses)
             PiOut = np.reshape(xk, (k_plus_1, n_outcomes))
             expected = (F @ PiOut) * n_pulses
-            elapsed = time.time() - start_time
-            js_post_message(xk.tolist(), expected.flatten().tolist(), float(mse), float(elapsed))
+            js_post_message(xk.tolist(), expected.flatten().tolist(), float(mse))
         return False
 
     res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), method='trust-constr', bounds=[(0,1)]*len(x0), constraints={'type': 'eq', 'fun': constraint}, options={'maxiter': max_iter, 'verbose': 0}, callback=iteration_callback)
@@ -233,8 +230,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
     final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
     PiOut_f = np.reshape(res.x, (k_plus_1, n_outcomes))
     expected_f = (F @ PiOut_f) * n_pulses
-    elapsed = time.time() - start_time
-    return res.x.tolist(), expected_f.flatten().tolist(), float(final_mse), float(elapsed)
+    return res.x.tolist(), expected_f.flatten().tolist(), float(final_mse)
 `;
         self.onmessage = async function(e) {
             const data = e.data;
@@ -245,13 +241,13 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 self.postMessage({type: 'ready'});
             } else if (data.type === 'lsdt') {
                 const res = pyodide.globals.get("run_lsdt")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.lambdaReg);
-                self.postMessage({type: 'lsdt_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2], time: res[3], regNorm: res[4], lambda: data.lambdaReg});
+                self.postMessage({type: 'lsdt_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2], regNorm: res[3], lambda: data.lambdaReg});
             } else if (data.type === 'mle') {
-                const js_callback = (xk, expected, mse, elapsed) => {
-                    self.postMessage({ type: 'mle_progress', povm: xk.toJs(), expected: expected.toJs(), mse: mse, time: elapsed });
+                const js_callback = (xk, expected, mse) => {
+                    self.postMessage({ type: 'mle_progress', povm: xk.toJs(), expected: expected.toJs(), mse: mse });
                 };
                 const res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback);
-                self.postMessage({type: 'mle_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2], time: res[3]});
+                self.postMessage({type: 'mle_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2]});
             }
         };
     </script>
@@ -269,7 +265,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         let truePOVM = null; 
         
         let results = { lsdt: null, mle: null, bdt: null };
-        let startTimes = { LSDT: 0, MLE: 0, BDT: 0 };
+        let startTimes = { LSDT: 0, MLE: 0, BDT: 0 }; 
         
         // LSDT Sweep tracking
         let lsdtLambdas = [];
@@ -279,6 +275,10 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         let pyWorker = null;
         let simWasm = null;
         let bdtAnimationFrame;
+
+        let bdtSampleCount = 0;
+        let bdtMean = null;
+        let bdtM2 = null;
 
         Module.onRuntimeInitialized = function() { logMsg("BDT WASM Ready."); checkReady(); };
         createSimulator({ locateFile: (path) => path.endsWith('.wasm') ? 'POVM/' + path : path }).then(instance => { simWasm = instance; logMsg("Simulator WASM Ready."); checkReady(); });
@@ -300,7 +300,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                     let povmMse = truePOVM ? calcPovmMse(d.povm) : null;
                     lsdtHistory.push({ lambda: d.lambda, data_mse: d.mse, povm_mse: povmMse, reg_norm: d.regNorm });
                     
-                    updateLivePlot('LSDT', d.povm, d.expected, d.mse, 4, 5);
+                    updateLivePlot('LSDT', d.povm, d.expected, d.mse, 4, 5, null, null);
                     
                     // Update L-Curve
                     Plotly.extendTraces('plot-lcurve', { x: [[d.mse]], y: [[d.regNorm]], text: [[`Lambda: ${d.lambda.toExponential(2)}`]] }, [0]);
@@ -313,16 +313,17 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                     }
                 }
                 else if (d.type === 'mle_progress') { 
-                    updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+                    updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2, null, null); 
                 }
                 else if (d.type === 'mle_done') { 
                     results.mle = d.povm; 
-                    updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2); 
+                    updateLivePlot('MLE', d.povm, d.expected, d.mse, 0, 2, null, null); 
                     handleSolverDone('MLE'); 
                 }
             };
         }
 
+        // Initialize the first worker
         createPyWorker();
 
         function checkReady() {
@@ -336,7 +337,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             const minA = parseFloat(document.getElementById('sim-mina').value);
             const numA = parseInt(document.getElementById('sim-numa').value);
             
-            const maxN = simWasm._calculate_optimal_maxInputN(maxA, nTrials);
+            const maxN = simWasm._calculate_optimal_maxInputN(maxA*parseFloat(document.getElementById('sim-eta').value), nTrials);
             document.getElementById('tomo-maxn').value = maxN;
             currentMaxN = maxN; currentMaxC = maxC; nPulses = nTrials;
             logMsg(`Calculated optimal Max N = ${maxN}`);
@@ -406,16 +407,41 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 {x: [], y: [], mode: 'lines+markers', name: 'BDT POVM MSE', line:{color:'#0056b3', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
                 {x: [], y: [], mode: 'lines+markers', name: 'LSDT Data MSE', line:{color:'#28a745'}, marker:{size:6}},
                 {x: [], y: [], mode: 'lines+markers', name: 'LSDT POVM MSE', line:{color:'#28a745', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
+                // NEW: Bayesian Estimate of POVM MSE
                 {x: [], y: [], mode: 'lines', name: 'BDT Bayesian POVM MSE Est.', line:{color:'#17a2b8', dash:'dash'}}
             ];
+            // Plot MSE against Elapsed Time
             Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, xaxis: {title: 'Elapsed Time (seconds)'}, margin:{t:40} });
-            
+
             Plotly.newPlot('plot-lcurve', [{ x: [], y: [], text: [], mode: 'lines+markers', name: 'L-Curve', line:{color:'#28a745'} }], {
                 title: 'LSDT L-Curve (Optimal λ)',
                 xaxis: {title: 'Data Fit (Residual Norm)', type: 'log'},
                 yaxis: {title: 'Smoothness (Regularization Norm)', type: 'log'},
                 margin: {t:40, b:40, l:60, r:40}
             });
+        }
+
+        function calcPovmMse(flatArray) {
+            if (!truePOVM) return null;
+            
+            // Calculate N for both matrices based on the shared Max C
+            let simMaxN = (truePOVM.length / (currentMaxC + 1)) - 1;
+            let reconMaxN = (flatArray.length / (currentMaxC + 1)) - 1;
+            
+            // Truncate to the shared space
+            let minN = Math.min(simMaxN, reconMaxN);
+            
+            let mse = 0;
+            let elements = 0;
+            
+            for (let n = 0; n <= minN; n++) {
+                for (let c = 0; c <= currentMaxC; c++) {
+                    let idx = n * (currentMaxC + 1) + c;
+                    mse += Math.pow(truePOVM[idx] - flatArray[idx], 2);
+                    elements++;
+                }
+            }
+            return mse / elements;
         }
 
         function addHeatmap(title, flatArray) {
@@ -429,6 +455,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 document.getElementById('plot-heatmaps').appendChild(div);
             }
             
+            // Truncate heatmap to the actual bounds of the array being plotted
             let arrayMaxN = (flatArray.length / (currentMaxC + 1)) - 1;
             let plotMaxN = Math.min(currentMaxN, arrayMaxN);
             
@@ -446,25 +473,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 margin:{t:30, b:30, l:40, r:40}
             });
         }
-
-        function calcPovmMse(flatArray) {
-            if (!truePOVM) return null;
-            let simMaxN = (truePOVM.length / (currentMaxC + 1)) - 1;
-            let reconMaxN = (flatArray.length / (currentMaxC + 1)) - 1;
-            let minN = Math.min(simMaxN, reconMaxN);
-            
-            let mse = 0;
-            let elements = 0;
-            for (let n = 0; n <= minN; n++) {
-                for (let c = 0; c <= currentMaxC; c++) {
-                    let idx = n * (currentMaxC + 1) + c;
-                    mse += Math.pow(truePOVM[idx] - flatArray[idx], 2);
-                    elements++;
-                }
-            }
-            return mse / elements;
-        }
-
+        
         function updateLivePlot(alg, povmFlat, expectedCounts, dataMse, dataMseIdx, povmMseIdx, bayesianMse = null, bayesianMseIdx = null) {
             addHeatmap(alg, povmFlat);
             
@@ -488,40 +497,22 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             }
             if (tracesToUpdate.length > 0) Plotly.restyle('plot-fit', { y: yData }, tracesToUpdate);
 
+            // Calculate elapsed time in seconds from Date.now()
             let elapsedSeconds = (Date.now() - startTimes[alg]) / 1000.0;
 
             if (dataMseIdx !== null) {
                 Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[dataMse]] }, [dataMseIdx]);
-                
                 if (truePOVM && povmMseIdx !== null) {
                     let povmMse = calcPovmMse(povmFlat);
                     Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[povmMse]] }, [povmMseIdx]);
                 }
-                
+
+                // NEW: Plot the Bayesian Uncertainty Estimate
                 if (bayesianMse !== null && bayesianMseIdx !== null && bdtSampleCount > 1) {
                     Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[bayesianMse]] }, [bayesianMseIdx]);
                 }
             }
         }
-
-        document.getElementById('btn-stop').onclick = () => {
-            logMsg("User aborted the tomography run.");
-            if (bdtAnimationFrame) {
-                cancelAnimationFrame(bdtAnimationFrame);
-                bdtAnimationFrame = null;
-                try {
-                    Module.ccall('bdt_cleanup', 'void', [], []);
-                    if (bdtAlphasPtr) { Module._free(bdtAlphasPtr); bdtAlphasPtr = null; }
-                    if (bdtCountsPtr) { Module._free(bdtCountsPtr); bdtCountsPtr = null; }
-                    if (bdtPovmPtr) { Module._free(bdtPovmPtr); bdtPovmPtr = null; }
-                } catch(e) { console.warn("WASM cleanup error:", e); }
-            }
-            logMsg("Terminating Python worker and restarting engine...");
-            createPyWorker(); 
-
-            document.getElementById('btn-run-all').disabled = false;
-            document.getElementById('btn-stop').disabled = true;
-        };
 
         document.getElementById('btn-run-all').onclick = () => {
             currentMaxN = parseInt(document.getElementById('tomo-maxn').value);
@@ -604,17 +595,18 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 document.getElementById('btn-download').disabled = false;
                 
                 if (truePOVM) {
-                    logMsg("Final MSEs against True POVM:");
+                    logMsg("Calculating final MSEs against True POVM.");
                     Object.keys(results).forEach(alg => {
                         if (results[alg]) {
+                            // Call the updated truncation function instead of hardcoding array length
                             let finalMse = calcPovmMse(results[alg]);
-                            logMsg(`-> ${alg.toUpperCase()}: ${finalMse.toExponential(4)}`);
+                            logMsg(`-> ${alg.toUpperCase()} vs True: ${finalMse.toExponential(4)}`);
                         }
                     });
                 }
             }
         }
-
+        
         function calcExpectedData(povmFlat) {
             const numA = parsedAlphas.length;
             let expected = new Float64Array(numA * (currentMaxC + 1));
@@ -634,17 +626,16 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
 
         let bdtTotalIter, bdtStepSize, bdtCurrentIter, numParams;
         let bdtAlphasPtr, bdtCountsPtr, bdtPovmPtr;
-        let bdtSampleCount = 0;
-        let bdtMean = null, bdtM2 = null;
 
         function runBDT() {
             numParams = (currentMaxC + 1) * (currentMaxN + 1);
             let initialPovm = new Float64Array(numParams);
-            
+
+            // NEW: Reset Welford variables
             bdtSampleCount = 0;
             bdtMean = new Float64Array(numParams);
             bdtM2 = new Float64Array(numParams);
-
+            
             if (document.getElementById('bdt-warmstart').checked && results.mle) {
                 logMsg("Warm-starting BDT using MLE results.");
                 initialPovm.set(results.mle);
@@ -679,20 +670,27 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, bdtPovmPtr]);
                 bdtCurrentIter += stepsThisFrame;
                 
+                // Read the raw walker state from WASM
                 let currentState = new Float64Array(Module.HEAPF64.buffer, bdtPovmPtr, numParams);
+                
                 bdtSampleCount++;
                 let bayesianMse = 0.0;
                 
+                // Welford's Online Algorithm for Mean and Variance
                 for (let i = 0; i < numParams; i++) {
                     let val = currentState[i];
                     let delta = val - bdtMean[i];
                     bdtMean[i] += delta / bdtSampleCount;
                     let delta2 = val - bdtMean[i];
                     bdtM2[i] += delta * delta2;
-                    if (bdtSampleCount > 1) bayesianMse += (bdtM2[i] / (bdtSampleCount - 1));
+                    
+                    if (bdtSampleCount > 1) {
+                        bayesianMse += (bdtM2[i] / (bdtSampleCount - 1));
+                    }
                 }
-                bayesianMse /= numParams;
+                bayesianMse /= numParams; // Average variance across all elements
                 
+                // Use the running posterior mean for all UI updates
                 results.bdt = bdtMean.slice(); 
                 let expected = calcExpectedData(results.bdt);
                 
@@ -702,7 +700,9 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 }
                 dataMse /= parsedCounts.length;
 
+                // Pass the Bayesian MSE and its trace index (6) to the plotter
                 updateLivePlot('BDT', results.bdt, expected, dataMse, 1, 3, bayesianMse, 6);
+                
                 bdtAnimationFrame = requestAnimationFrame(bdtLoop);
             } else {
                 Module.ccall('bdt_cleanup', 'void', [], []);
@@ -710,6 +710,30 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 handleSolverDone('BDT');
             }
         }
+
+        document.getElementById('btn-stop').onclick = () => {
+            logMsg("User aborted the tomography run.");
+            
+            // 1. Stop BDT (WASM) if running
+            if (bdtAnimationFrame) {
+                cancelAnimationFrame(bdtAnimationFrame);
+                bdtAnimationFrame = null;
+                try {
+                    Module.ccall('bdt_cleanup', 'void', [], []);
+                    if (bdtAlphasPtr) { Module._free(bdtAlphasPtr); bdtAlphasPtr = null; }
+                    if (bdtCountsPtr) { Module._free(bdtCountsPtr); bdtCountsPtr = null; }
+                    if (bdtPovmPtr) { Module._free(bdtPovmPtr); bdtPovmPtr = null; }
+                } catch(e) { console.warn("WASM cleanup error:", e); }
+            }
+
+            // 2. Stop MLE/LSDT (Pyodide) if running
+            logMsg("Terminating Python worker and restarting engine...");
+            createPyWorker(); // Terminate and reboot
+
+            // 3. Reset UI Buttons
+            document.getElementById('btn-run-all').disabled = false;
+            document.getElementById('btn-stop').disabled = true;
+        };
 
         // --- JSON Export Logic ---
         document.getElementById('btn-download').onclick = () => {
@@ -771,13 +795,15 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
 
             const jsonString = JSON.stringify(exportObject, null, 4);
             const blob = new Blob([jsonString], { type: 'application/json' });
+            
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = \`tomography_results_\${Date.now()}.json\`;
+            link.download = `tomography_results_${Date.now()}.json`;
             link.style.display = 'none';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            
             logMsg("JSON Download complete.");
         };
     </script>
