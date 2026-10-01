@@ -145,15 +145,14 @@ def diff_P(Pi_flat, PMeas, F, n_outcomes, Npulses):
 #    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse)
 
 def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
+    start_time = time.time()
     P_meas = np.array(P_list).reshape((-1, n_outcomes))
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
     piOpt = cp.Variable((k_plus_1, n_outcomes))
     constraints = [piOpt >= 0, cp.sum(piOpt, axis=1) == 1]
     
-    # Base data fitting objective (Least Squares)
     data_fitting = cp.sum((P_meas - n_pulses*F@piOpt)**2/(P_meas+0.5))
     
-    # Tikhonov Regularization: Penalize discrete 2nd derivative along the n-axis
     if lambda_reg > 0:
         regularization = lambda_reg * cp.sum(cp.square(cp.diff(piOpt, k=2, axis=0)))
         obj = cp.Minimize(data_fitting + regularization)
@@ -162,16 +161,14 @@ def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
         
     prob = cp.Problem(obj, constraints)
     
-    # Force Pyodide-safe C-based solvers
-    try:
-        prob.solve(solver=cp.SCS, verbose=False)
-    except Exception:
-        prob.solve(solver=cp.ECOS, verbose=False)
+    # Use default Clarabel safely now that Rayon is restricted to 1 thread
+    prob.solve(solver=cp.CLARABEL, verbose=False)
         
     Pi_res = piOpt.value if piOpt.value is not None else (np.ones((k_plus_1, n_outcomes))/n_outcomes)
     expected = (F @ Pi_res) * n_pulses
     final_mse = diff_P(Pi_res.flatten(), P_meas, F, n_outcomes, n_pulses)
-    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse)
+    elapsed = time.time() - start_time
+    return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse), float(elapsed)
       
 def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
     k = int(len(Pi_flat)/n_outcomes)
