@@ -88,6 +88,8 @@
               
                 <hr>
                 <div><label><input type="checkbox" id="run-mle" checked> MLEDT (SciPy Minimize)</label></div>
+
+                <div><label style="font-weight:normal; font-size: 12px; margin-left: 20px;"><input type="checkbox" id="mle-warmstart" checked> Warm-start MLE with LSDT</label></div>
                 
                 <div class="form-row" style="margin-top: 5px;">
                     <div class="form-group"><label>MLE Iters</label><input type="number" id="mle-iter" value="200"></div>
@@ -208,10 +210,15 @@ def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
     lL = -np.sum(PMeas * np.log(expected + 1e-10))
     return lL / (F.shape[0] * Npulses)
 
-def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message):
+def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message, initial_guess):
     P = np.array(P_list).reshape((-1, n_outcomes))
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
-    x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
+    #x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
+    # Use warm-start if provided, otherwise default to flat distribution
+    if initial_guess is not None:
+        x0 = np.array(initial_guess)
+    else:
+        x0 = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
     
     def constraint(x):
         Pi = np.reshape(x, (k_plus_1, n_outcomes))
@@ -246,7 +253,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 const js_callback = (xk, expected, mse) => {
                     self.postMessage({ type: 'mle_progress', povm: xk.toJs(), expected: expected.toJs(), mse: mse });
                 };
-                const res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback);
+                const res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback, data.initialGuess);
                 self.postMessage({type: 'mle_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2]});
             }
         };
@@ -580,7 +587,25 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                     const iters = parseInt(document.getElementById('mle-iter').value);
                     const updateRate = parseInt(document.getElementById('mle-update').value);
                     startTimes['MLE'] = Date.now();
-                    pyWorker.postMessage({type: 'mle', counts: Array.from(parsedCounts), alphas: Array.from(parsedAlphas).map(a=>a*a), maxC: currentMaxC, maxN: currentMaxN, npulses: nPulses, iters: iters, updateRate: updateRate});
+
+                    let initialGuess = null;
+                    if (document.getElementById('mle-warmstart').checked && results.lsdt) {
+                        logMsg("Warm-starting MLE using LSDT results.");
+                        initialGuess = Array.from(results.lsdt);
+                    }
+                    
+                    //pyWorker.postMessage({type: 'mle', counts: Array.from(parsedCounts), alphas: Array.from(parsedAlphas).map(a=>a*a), maxC: currentMaxC, maxN: currentMaxN, npulses: nPulses, iters: iters, updateRate: updateRate});
+                    pyWorker.postMessage({
+                        type: 'mle', 
+                        counts: Array.from(parsedCounts), 
+                        alphas: Array.from(parsedAlphas).map(a=>a*a), 
+                        maxC: currentMaxC, 
+                        maxN: currentMaxN, 
+                        npulses: nPulses, 
+                        iters: iters, 
+                        updateRate: updateRate,
+                        initialGuess: initialGuess
+                    });
                 } else checkNext('MLE');
             } else if (completedAlg === 'MLE') {
                 if (document.getElementById('run-bdt').checked) {
@@ -766,6 +791,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                         step: parseFloat(document.getElementById('lsdt-step').value)
                     },
                     mle: {
+                        warm_start: document.getElementById('mle-warmstart').checked,
                         iterations: parseInt(document.getElementById('mle-iter').value),
                         update_rate: parseInt(document.getElementById('mle-update').value)
                     },
