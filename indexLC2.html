@@ -207,6 +207,19 @@ def run_lsdt(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, lambda_reg):
     
     return Pi_res.flatten().tolist(), expected.flatten().tolist(), float(final_mse), reg_norm
 
+# --- 1. Finite-Difference Objective (for trust-constr) ---
+def logL(Pi_flat, PMeas, F, n_outcomes, Npulses):
+    Pi_safe = np.clip(Pi_flat, 1e-15, 1.0)
+    k = int(len(Pi_safe)/n_outcomes)
+    Pi = np.reshape(Pi_safe, (k, n_outcomes))
+    
+    expected = (F @ Pi) * Npulses
+    expected = np.maximum(expected, 1e-12)
+    
+    lL = -np.sum(PMeas * np.log(expected)) / (F.shape[0] * Npulses)
+    return lL
+
+# --- 2. Exact Gradient Objective (for SLSQP) ---
 def logL_with_grad(Pi_flat, PMeas, F, n_outcomes, Npulses):
     Pi_safe = np.clip(Pi_flat, 1e-15, 1.0)
     k = int(len(Pi_safe)/n_outcomes)
@@ -232,11 +245,12 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             if len(x0) == k_plus_1 * n_outcomes:
                 valid_guess = True
         except Exception as e:
+            import js
             js.console.log(f"Warm start conversion failed, falling back to uniform: {str(e)}")
             
     if valid_guess:
         if mle_method == 'trust-constr':
-            # trust-constr interior point needs a boundary buffer
+            # trust-constr needs a boundary buffer so finite-differences don't step into negative space
             uniform_dist = (np.ones((k_plus_1, n_outcomes)) / n_outcomes).flatten()
             x0 = 0.95 * x0 + 0.05 * uniform_dist
             
@@ -250,6 +264,8 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         Pi = np.reshape(x, (k_plus_1, n_outcomes))
         return np.sum(Pi, 1) - 1.0
         
+    # We always keep the exact constraint Jacobian because it's just a matrix of 1s and 0s.
+    # Forcing SciPy to guess this via finite-difference is a waste of CPU.
     def constraint_jac(x):
         J = np.zeros((k_plus_1, len(x)))
         for i in range(k_plus_1):
@@ -257,7 +273,6 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         return J
 
     iteration_state = {'nit': 0}
-    # *args absorbs 'state' if passed by trust-constr, ignores if SLSQP
     def iteration_callback(xk, *args):
         iteration_state['nit'] += 1
         if iteration_state['nit'] % update_rate == 0:
@@ -267,10 +282,24 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             js_post_message(xk.tolist(), expected.flatten().tolist(), float(mse))
         return False
 
-    res = minimize(logL_with_grad, x0, args=(P, F, n_outcomes, n_pulses), 
-                   method=mle_method, jac=True, bounds=[(0,1)]*len(x0), 
+    # --- DYNAMIC ROUTING FOR SOLVERS ---
+    solver_options = {'maxiter': max_iter, 'disp': False, 'verbose': 0}
+    
+    if mle_method == 'SLSQP':
+        solver_options['ftol'] = 1e-12
+        target_fun = logL_with_grad
+        use_jac = True
+    elif mle_method == 'trust-constr':
+        solver_options['gtol'] = 1e-12
+        solver_options['xtol'] = 1e-12
+        solver_options['barrier_tol'] = 1e-12
+        target_fun = logL       # Use the version WITHOUT the gradient array
+        use_jac = False         # Tell SciPy to calculate finite-difference gradients automatically
+
+    res = minimize(target_fun, x0, args=(P, F, n_outcomes, n_pulses), 
+                   method=mle_method, jac=use_jac, bounds=[(0,1)]*len(x0), 
                    constraints={'type': 'eq', 'fun': constraint_fun, 'jac': constraint_jac}, 
-                   options={'maxiter': max_iter, 'disp': False, 'verbose': 0, 'ftol': 1e-12}, 
+                   options=solver_options, 
                    callback=iteration_callback)
     
     final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
