@@ -358,6 +358,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
         let truePOVM = null; 
         
         let results = { lsdt: null, mle: null, bdt: null };
+        let timeSeriesData = { LSDT: [], MLE: [], BDT: [] };
         let startTimes = { LSDT: 0, MLE: 0, BDT: 0 }; 
         
         // LSDT Sweep tracking
@@ -603,6 +604,14 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             let elapsedSeconds = (Date.now() - startTimes[alg]) / 1000.0;
 
             if (dataMseIdx !== null) {
+                if (alg === 'LSDT' || alg === 'MLE' || alg === 'BDT') {
+                    timeSeriesData[alg].push({
+                        time: elapsedSeconds,
+                        data_mse: dataMse,
+                        povm_mse: (truePOVM && povmMseIdx !== null) ? calcPovmMse(povmFlat) : null,
+                        bayesian_mse: bayesianMse
+                    });
+                }
                 Plotly.extendTraces('plot-mse', { x: [[elapsedSeconds]], y: [[dataMse]] }, [dataMseIdx]);
                 if (truePOVM && povmMseIdx !== null) {
                     let povmMse = calcPovmMse(povmFlat);
@@ -630,14 +639,17 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 tracesToClear.push(4, 5); // LSDT Data MSE, LSDT POVM MSE
                 Plotly.restyle('plot-lcurve', {x: [[]], y: [[]], text:[[]]}, [0]);
                 lsdtHistory = [];
+                timeSeriesData.LSDT = [];
             }
             if (document.getElementById('run-mle').checked) {
                 results.mle = null;
                 tracesToClear.push(0, 2); // MLE Data MSE, MLE POVM MSE
+                timeSeriesData.MLE = [];
             }
             if (document.getElementById('run-bdt').checked) {
                 results.bdt = null;
                 tracesToClear.push(1, 3, 6); // BDT Data MSE, BDT POVM MSE, BDT Bayesian
+                timeSeriesData.BDT = [];
             }
 
             if (tracesToClear.length > 0) {
@@ -922,6 +934,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 },
                 results: {
                     lsdt_sweep_history: lsdtHistory,
+                    time_series: timeSeriesData,
                     povm_matrices: {
                         true_povm: truePOVM ? Array.from(truePOVM) : null,
                         lsdt_final: results.lsdt ? Array.from(results.lsdt) : null,
