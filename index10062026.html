@@ -314,11 +314,18 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
     import js
     js.console.log(f"Dynamic Tolerances set - ftol: {dynamic_ftol:.2e}, xtol: {dynamic_xtol:.2e}")
 
-    res = minimize(target_fun, x0, args=(P, F, n_outcomes, n_pulses), 
+    if mle_method == 'SLSQP':
+        res = minimize(target_fun, x0, args=(P, F, n_outcomes, n_pulses), 
                    method=mle_method, jac=use_jac, bounds=[(0,1)]*len(x0), 
                    constraints={'type': 'eq', 'fun': constraint_fun, 'jac': constraint_jac}, 
                    options=solver_options, 
                    callback=iteration_callback)
+    elif mle_method == 'trust-constr':
+        res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), 
+                    method='trust-constr', bounds=[(0,1)]*len(x0), 
+                    constraints={'type': 'eq', 'fun': constraint}, 
+                    options={'maxiter': max_iter, 'verbose': 0}, 
+                    callback=iteration_callback)
     
     final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
     PiOut_f = np.reshape(res.x, (k_plus_1, n_outcomes))
