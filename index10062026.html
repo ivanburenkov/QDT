@@ -323,7 +323,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
     elif mle_method == 'trust-constr':
         res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), 
                     method='trust-constr', bounds=[(0,1)]*len(x0), 
-                    constraints={'type': 'eq', 'fun': constraint}, 
+                    constraints={'type': 'eq', 'fun': constraint_fun}, 
                     options={'maxiter': max_iter, 'verbose': 0}, 
                     callback=iteration_callback)
     
