@@ -790,6 +790,7 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             }
         }
         
+        /*
         function calcExpectedData(povmFlat) {
             const numA = parsedAlphas.length;
             let expected = new Float64Array(numA * (currentMaxC + 1));
@@ -800,6 +801,42 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                     for (let n = 0; n <= currentMaxN; n++) {
                         let p_n = (Math.exp(-mu) * Math.pow(mu, n)) / ((function f(x){return x===0?1:x*f(x-1)})(n));
                         sum += p_n * povmFlat[n * (currentMaxC + 1) + c];
+                    }
+                    expected[i * (currentMaxC + 1) + c] = sum * nPulses;
+                }
+            }
+            return expected;
+        }
+        */
+        // Helper to replace the unstable recursive factorial
+        function poisson_pdf(n, mu) {
+            if (mu <= 1e-9) return n === 0 ? 1.0 : 0.0;
+            let res = Math.exp(-mu);
+            for (let i = 1; i <= n; i++) res *= (mu / i);
+            return res;
+        }
+
+        function calcExpectedData(povmFlat) {
+            const numA = parsedAlphas.length;
+            let expected = new Float64Array(numA * (currentMaxC + 1));
+            
+            for (let i = 0; i < numA; i++) {
+                let mu = parsedAlphas[i] * parsedAlphas[i];
+                
+                // Precompute F matrix row exactly like Python LSDT/MLE
+                let f_row = new Float64Array(currentMaxN + 1);
+                let f_sum = 0.0;
+                for (let n = 0; n < currentMaxN; n++) {
+                    f_row[n] = poisson_pdf(n, mu);
+                    f_sum += f_row[n];
+                }
+                // Lump the infinite Poisson tail into the max input state
+                f_row[currentMaxN] = Math.max(0.0, 1.0 - f_sum); 
+                
+                for (let c = 0; c <= currentMaxC; c++) {
+                    let sum = 0;
+                    for (let n = 0; n <= currentMaxN; n++) {
+                        sum += f_row[n] * povmFlat[n * (currentMaxC + 1) + c];
                     }
                     expected[i * (currentMaxC + 1) + c] = sum * nPulses;
                 }
