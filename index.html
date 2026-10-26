@@ -251,7 +251,7 @@ def logL_with_grad(Pi_flat, PMeas, F, n_outcomes, Npulses):
     grad = - (F.T @ (PMeas / expected)) / F.shape[0]
     return lL, grad.flatten()
 
-def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message, initial_guess=None, mle_method='SLSQP'):
+def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update_rate, js_post_message, initial_guess=None, mle_method='SLSQP', use_early_stop=False, stop_threshold=0.0):
     P = np.array(P_list).reshape((-1, n_outcomes))
     F = Fexperiment(np.array(alpha_list), k_plus_1 - 1)
     
@@ -344,9 +344,10 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                        constraints={'type': 'eq', 'fun': constraint_fun, 'jac': constraint_jac}, 
                        options=solver_options, 
                        callback=iteration_callback)
+            best_x = res.x
         except EarlyStop:
-        import js
-        js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
+            import js
+            js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
     elif mle_method == 'trust-constr':
         try:
             res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), 
@@ -354,14 +355,15 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                         constraints={'type': 'eq', 'fun': constraint_fun}, 
                         options={'maxiter': max_iter, 'verbose': 0}, 
                         callback=iteration_callback)
+            best_x = res.x
         except EarlyStop:
-        import js
-        js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
+            import js
+            js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
     
-    final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
-    PiOut_f = np.reshape(res.x, (k_plus_1, n_outcomes))
+    final_mse = diff_P(best_x, P, F, n_outcomes, n_pulses)
+    PiOut_f = np.reshape(best_x, (k_plus_1, n_outcomes))
     expected_f = (F @ PiOut_f) * n_pulses
-    return res.x.tolist(), expected_f.flatten().tolist(), float(final_mse)
+    return best_x.tolist(), expected_f.flatten().tolist(), float(final_mse)
 `;
         self.onmessage = async function(e) {
             const data = e.data;
