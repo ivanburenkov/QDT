@@ -120,6 +120,13 @@
                     <div class="form-group"><label>Ntune (0 = off)</label><input type="number" id="mcmc-ntune" value="100"></div>
                     <div class="form-group"><label>Target Acc. Rate</label><input type="number" id="mcmc-targetacc" value="0.25" step="0.01"></div>
                 </div>
+                <hr>
+                <div style="margin-bottom: 5px;"><strong>Early Stopping (Noise Floor)</strong></div>
+                <div class="form-row">
+                    <div class="form-group"><label>Threshold MSE</label><input type="number" id="stop-threshold" step="any" value="0.0"></div>
+                </div>
+                <div><label style="font-weight:normal; font-size: 12px;"><input type="checkbox" id="mle-early-stop" checked> Stop MLE below threshold</label></div>
+                <div><label style="font-weight:normal; font-size: 12px;"><input type="checkbox" id="bdt-early-stop"> Stop BDT below threshold</label></div>
             </fieldset>
 
             <button id="btn-run-all" disabled>Run Selected Tomography</button>
@@ -284,14 +291,25 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             J[i, i*n_outcomes : (i+1)*n_outcomes] = 1.0
         return J
 
+    class EarlyStop(Exception): pass
+    best_x = np.copy(x0)
     iteration_state = {'nit': 0}
+
     def iteration_callback(xk, *args):
+        nonlocal best_x
+        best_x = np.copy(xk)
         iteration_state['nit'] += 1
+        
+        mse = diff_P(xk, P, F, n_outcomes, n_pulses)
+        
         if iteration_state['nit'] % update_rate == 0:
-            mse = diff_P(xk, P, F, n_outcomes, n_pulses)
             PiOut = np.reshape(xk, (k_plus_1, n_outcomes))
             expected = (F @ PiOut) * n_pulses
             js_post_message(xk.tolist(), expected.flatten().tolist(), float(mse))
+            
+        if use_early_stop and mse <= stop_threshold:
+            raise EarlyStop()
+            
         return False
 
     # --- DYNAMIC ROUTING FOR SOLVERS ---
@@ -320,17 +338,25 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
     js.console.log(f"Dynamic Tolerances set - ftol: {dynamic_ftol:.2e}, xtol: {dynamic_xtol:.2e}")
 
     if mle_method == 'SLSQP':
-        res = minimize(target_fun, x0, args=(P, F, n_outcomes, n_pulses), 
-                   method=mle_method, jac=use_jac, bounds=[(0,1)]*len(x0), 
-                   constraints={'type': 'eq', 'fun': constraint_fun, 'jac': constraint_jac}, 
-                   options=solver_options, 
-                   callback=iteration_callback)
+        try:
+            res = minimize(target_fun, x0, args=(P, F, n_outcomes, n_pulses), 
+                       method=mle_method, jac=use_jac, bounds=[(0,1)]*len(x0), 
+                       constraints={'type': 'eq', 'fun': constraint_fun, 'jac': constraint_jac}, 
+                       options=solver_options, 
+                       callback=iteration_callback)
+        except EarlyStop:
+        import js
+        js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
     elif mle_method == 'trust-constr':
-        res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), 
-                    method='trust-constr', bounds=[(0,1)]*len(x0), 
-                    constraints={'type': 'eq', 'fun': constraint_fun}, 
-                    options={'maxiter': max_iter, 'verbose': 0}, 
-                    callback=iteration_callback)
+        try:
+            res = minimize(logL, x0, args=(P, F, n_outcomes, n_pulses), 
+                        method='trust-constr', bounds=[(0,1)]*len(x0), 
+                        constraints={'type': 'eq', 'fun': constraint_fun}, 
+                        options={'maxiter': max_iter, 'verbose': 0}, 
+                        callback=iteration_callback)
+        except EarlyStop:
+        import js
+        js.console.log("MLE Early Stopping Triggered: MSE reached custom threshold.")
     
     final_mse = diff_P(res.x, P, F, n_outcomes, n_pulses)
     PiOut_f = np.reshape(res.x, (k_plus_1, n_outcomes))
@@ -351,14 +377,12 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 const js_callback = (xk, expected, mse) => {
                     self.postMessage({ type: 'mle_progress', povm: xk.toJs(), expected: expected.toJs(), mse: mse });
                 };
-                
-                let res;
-                if (data.initialGuess) {
-                    res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback, data.initialGuess, data.mleMethod);
-                } else {
-                    res = pyodide.globals.get("run_mle")(data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, data.iters, data.updateRate, js_callback, null, data.mleMethod);
-                }
-                
+                const initGuess = data.initialGuess ? data.initialGuess : null;
+                const res = pyodide.globals.get("run_mle")(
+                    data.counts, data.alphas, data.maxC + 1, data.maxN + 1, data.npulses, 
+                    data.iters, data.updateRate, js_callback, 
+                    initGuess, data.mleMethod, data.useEarlyStop, data.stopThreshold
+                );
                 self.postMessage({type: 'mle_done', povm: res[0].toJs(), expected: res[1].toJs(), mse: res[2]});
             }
         };
@@ -527,6 +551,15 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
             reader.readAsText(e.target.files[0]);
         };
 
+        function calcShotNoiseMse(countsArray, pulsesPerAlpha) {
+            let expectedMse = 0;
+            for (let i = 0; i < countsArray.length; i++) {
+                let p = countsArray[i] / pulsesPerAlpha;
+                expectedMse += (p * (1.0 - p)) / pulsesPerAlpha;
+            }
+            return expectedMse / countsArray.length;
+        }
+
         function initPlots() {
             const alphaSq = Array.from(parsedAlphas).map(a => a*a);
             const fitTraces = [];
@@ -549,6 +582,18 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                 {x: [], y: [], mode: 'lines+markers', name: 'LSDT POVM MSE', line:{color:'#28a745', dash:'dot'}, visible: truePOVM ? true : 'legendonly'},
                 {x: [], y: [], mode: 'lines', name: 'BDT Bayesian POVM MSE Est.', line:{color:'#17a2b8', dash:'dash'}}
             ];
+            let noiseFloor = calcShotNoiseMse(parsedCounts, nPulses);
+            document.getElementById('stop-threshold').value = noiseFloor.toExponential(6);
+            logMsg(`Theoretical Shot-Noise MSE Floor calculated: ${noiseFloor.toExponential(4)}`);
+
+            mseTraces.push({
+                x: [0, 60], 
+                y: [noiseFloor, noiseFloor], 
+                mode: 'lines', 
+                name: 'Shot-Noise Floor', 
+                line: {color: '#ffc107', dash: 'dash', width: 2},
+                hoverinfo: 'skip'
+            });
             Plotly.newPlot('plot-mse', mseTraces, { title: 'Log-MSE Convergence', yaxis: {type:'log'}, xaxis: {title: 'Elapsed Time (seconds)'}, margin:{t:40} });
 
             Plotly.newPlot('plot-lcurve', [{ x: [], y: [], text: [], mode: 'lines+markers', name: 'L-Curve', line:{color:'#28a745'} }], {
@@ -764,6 +809,8 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                         updateRate: updateRate,
                         mleMethod: mleMethod,
                         initialGuess: initialGuess
+                        useEarlyStop: document.getElementById('mle-early-stop').checked,
+                        stopThreshold: parseFloat(document.getElementById('stop-threshold').value)
                     });
                 } else checkNext('MLE');
             } else if (completedAlg === 'MLE') {
@@ -935,6 +982,18 @@ def run_mle(P_list, alpha_list, n_outcomes, k_plus_1, n_pulses, max_iter, update
                     dataMse += Math.pow((parsedCounts[i]/nPulses) - (expected[i]/nPulses), 2);
                 }
                 dataMse /= parsedCounts.length;
+
+                let useBdtStop = document.getElementById('bdt-early-stop').checked;
+                let thresh = parseFloat(document.getElementById('stop-threshold').value);
+
+                if (useBdtStop && dataMse <= thresh) {
+                    logMsg(`BDT Early Stop: Data MSE (${dataMse.toExponential(4)}) reached threshold.`);
+                    bdtIsRunning = false;
+                    Module.ccall('bdt_cleanup', 'void', [], []);
+                    Module._free(bdtAlphasPtr); Module._free(bdtCountsPtr); Module._free(bdtPovmPtr);
+                    handleSolverDone('BDT');
+                    return; // Instantly halts the ping-pong loop
+                }
 
                 updateLivePlot('BDT', results.bdt, expected, dataMse, 1, 3, bayesianMse, 6);
                 
